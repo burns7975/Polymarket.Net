@@ -64,7 +64,7 @@ namespace Polymarket.Net.Clients.ClobApi
             QuantityType? quantityType = null,
             CancellationToken ct = default)
         {
-            var tokenResult = await PolymarketUtils.GetTokenInfoAsync(tokenId, _baseClient).ConfigureAwait(false);
+            var tokenResult = await PolymarketUtils.GetTokenInfoAsync(tokenId, _baseClient, ct).ConfigureAwait(false);
             if (!tokenResult)
                 return new WebCallResult<PolymarketOrderResult>(tokenResult.Error);
 
@@ -121,7 +121,7 @@ namespace Polymarket.Net.Clients.ClobApi
 
         public async Task<WebCallResult<CallResult<PolymarketOrderResult>[]>> PlaceMultipleOrdersAsync(IEnumerable<PolymarketOrderRequest> requests, CancellationToken ct = default)
         {
-            var tokenResult = await PolymarketUtils.GetTokenInfosAsync(requests.Select(x => x.TokenId).Distinct(), _baseClient).ConfigureAwait(false);
+            var tokenResult = await PolymarketUtils.GetTokenInfosAsync(requests.Select(x => x.TokenId).Distinct(), _baseClient, ct).ConfigureAwait(false);
             if (!tokenResult)
                 return new WebCallResult<CallResult<PolymarketOrderResult>[]>(tokenResult.Error);
 

@@ -1,4 +1,4 @@
-﻿using CryptoExchange.Net.Objects;
+using CryptoExchange.Net.Objects;
 using Polymarket.Net.Interfaces.Clients.ClobApi;
 using Polymarket.Net.Objects.Models;
 using System;
@@ -20,9 +20,12 @@ namespace Polymarket.Net.Utils
         /// <summary>
         /// Get token info either from cache or from the API if the cache is outdated or not present
         /// </summary>
-        public static async Task<CallResult<PolymarketOrderBook>> GetTokenInfoAsync(string tokenId, IPolymarketRestClientClobApi client)
+        public static async Task<CallResult<PolymarketOrderBook>> GetTokenInfoAsync(
+            string tokenId,
+            IPolymarketRestClientClobApi client,
+            CancellationToken ct = default)
         {
-            await _semaphoreSpot.WaitAsync().ConfigureAwait(false);
+            await _semaphoreSpot.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var envName = client.ClientOptions.Environment.Name;
@@ -36,7 +39,7 @@ namespace Polymarket.Net.Utils
                     return new CallResult<PolymarketOrderBook>(cachedTokenInfo.Book);
                 }
 
-                var result = await UpdateTokenInfoAsync(envName, [tokenId], client).ConfigureAwait(false);
+                var result = await UpdateTokenInfoAsync(envName, [tokenId], client, ct).ConfigureAwait(false);
                 return result ? new CallResult<PolymarketOrderBook>(result.Data.First(x => x.TokenId == tokenId)) : new CallResult<PolymarketOrderBook>(result.Error!);
             }
             finally
@@ -48,9 +51,12 @@ namespace Polymarket.Net.Utils
         /// <summary>
         /// Get token info either from cache or from the API if the cache is outdated or not present
         /// </summary>
-        public static async Task<CallResult<PolymarketOrderBook[]>> GetTokenInfosAsync(IEnumerable<string> tokenIds, IPolymarketRestClientClobApi client)
+        public static async Task<CallResult<PolymarketOrderBook[]>> GetTokenInfosAsync(
+            IEnumerable<string> tokenIds,
+            IPolymarketRestClientClobApi client,
+            CancellationToken ct = default)
         {
-            await _semaphoreSpot.WaitAsync().ConfigureAwait(false);
+            await _semaphoreSpot.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var envName = client.ClientOptions.Environment.Name;
@@ -69,7 +75,7 @@ namespace Polymarket.Net.Utils
                 }
 
                 // Update the tokens that are not in cache or outdated
-                var result = await UpdateTokenInfoAsync(envName, toRequest, client).ConfigureAwait(false);
+                var result = await UpdateTokenInfoAsync(envName, toRequest, client, ct).ConfigureAwait(false);
                 if (!result)
                     return result;
 
@@ -82,9 +88,9 @@ namespace Polymarket.Net.Utils
             }
         }
 
-        private static async Task<CallResult<PolymarketOrderBook[]>> UpdateTokenInfoAsync(string envName, IEnumerable<string> tokenIds, IPolymarketRestClientClobApi client)
+        private static async Task<CallResult<PolymarketOrderBook[]>> UpdateTokenInfoAsync(string envName, IEnumerable<string> tokenIds, IPolymarketRestClientClobApi client, CancellationToken ct)
         {
-            var tokenInfo = await client.ExchangeData.GetOrderBooksAsync(tokenIds).ConfigureAwait(false);
+            var tokenInfo = await client.ExchangeData.GetOrderBooksAsync(tokenIds, ct).ConfigureAwait(false);
             if (!tokenInfo)
                 return tokenInfo;
 
@@ -98,7 +104,7 @@ namespace Polymarket.Net.Utils
 
         private class PolymarketTokenCache
         {
-            public DateTime LastUpdateTime { get; set; } = default; 
+            public DateTime LastUpdateTime { get; set; } = default;
             public PolymarketOrderBook Book { get; set; }
 
             public PolymarketTokenCache(DateTime timestamp, PolymarketOrderBook book)
