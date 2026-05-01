@@ -3,6 +3,7 @@ using Polymarket.Net.Interfaces.Clients.ClobApi;
 using Polymarket.Net.Objects.Models;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -35,7 +36,8 @@ namespace Polymarket.Net.Utils
                     return new CallResult<PolymarketOrderBook>(cachedTokenInfo.Book);
                 }
 
-                return await UpdateTokenInfoAsync(envName, tokenId, client).ConfigureAwait(false);
+                var result = await UpdateTokenInfoAsync(envName, [tokenId], client).ConfigureAwait(false);
+                return result ? new CallResult<PolymarketOrderBook>(result.Data.First(x => x.TokenId == tokenId)) : new CallResult<PolymarketOrderBook>(result.Error!);
             }
             finally
             {
@@ -43,16 +45,54 @@ namespace Polymarket.Net.Utils
             }
         }
 
-        private static async Task<CallResult<PolymarketOrderBook>> UpdateTokenInfoAsync(string envName, string tokenId, IPolymarketRestClientClobApi client)
+        /// <summary>
+        /// Get token info either from cache or from the API if the cache is outdated or not present
+        /// </summary>
+        public static async Task<CallResult<PolymarketOrderBook[]>> GetTokenInfosAsync(IEnumerable<string> tokenIds, IPolymarketRestClientClobApi client)
         {
-            var tokenInfo = await client.ExchangeData.GetOrderBookAsync(tokenId).ConfigureAwait(false);
+            await _semaphoreSpot.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var envName = client.ClientOptions.Environment.Name;
+                if (envName.Equals("UnitTest", StringComparison.Ordinal))
+                    return new CallResult<PolymarketOrderBook[]>(tokenIds.Select(x => new PolymarketOrderBook { TickQuantity = 0.1m, TokenId = x }).ToArray());
+
+                // Get tokens that are not in cache or outdated
+                var toRequest = new List<string>();
+                foreach (var tokenId in tokenIds)
+                {
+                    if (!_tokenInfos.TryGetValue(envName, out var envTokens) || !envTokens.TryGetValue(tokenId, out var cachedTokenInfo)
+                        || DateTime.UtcNow - cachedTokenInfo.LastUpdateTime >= TimeSpan.FromSeconds(2))
+                    {
+                        toRequest.Add(tokenId);
+                    }
+                }
+
+                // Update the tokens that are not in cache or outdated
+                var result = await UpdateTokenInfoAsync(envName, toRequest, client).ConfigureAwait(false);
+                if (!result)
+                    return result;
+
+                // All tokens should now be in cache, return them
+                return new CallResult<PolymarketOrderBook[]>(tokenIds.Select(x => _tokenInfos[envName][x].Book).ToArray());
+            }
+            finally
+            {
+                _semaphoreSpot.Release();
+            }
+        }
+
+        private static async Task<CallResult<PolymarketOrderBook[]>> UpdateTokenInfoAsync(string envName, IEnumerable<string> tokenIds, IPolymarketRestClientClobApi client)
+        {
+            var tokenInfo = await client.ExchangeData.GetOrderBooksAsync(tokenIds).ConfigureAwait(false);
             if (!tokenInfo)
                 return tokenInfo;
 
             if (!_tokenInfos.ContainsKey(envName))
                 _tokenInfos[envName] = new Dictionary<string, PolymarketTokenCache>();
 
-            _tokenInfos[envName][tokenId] = new PolymarketTokenCache(DateTime.UtcNow, tokenInfo.Data);
+            foreach(var result in tokenInfo.Data)
+                _tokenInfos[envName][result.TokenId] = new PolymarketTokenCache(DateTime.UtcNow, result);
             return tokenInfo;
         }
 

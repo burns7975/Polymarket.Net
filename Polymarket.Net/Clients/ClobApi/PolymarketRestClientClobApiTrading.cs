@@ -68,7 +68,7 @@ namespace Polymarket.Net.Clients.ClobApi
             if (!tokenResult)
                 return new WebCallResult<PolymarketOrderResult>(tokenResult.Error);
 
-            var makerTakerQuantities = await GetMakerTakerQuantitiesAsync(tokenId, side, orderType, quantity, price, timeInForce, tokenResult.Data.TickQuantity, quantityType ?? QuantityType.Shares).ConfigureAwait(false);
+            var makerTakerQuantities = GetMakerTakerQuantities(tokenId, side, orderType, quantity, price, timeInForce, tokenResult.Data.TickQuantity, quantityType ?? QuantityType.Shares, tokenResult.Data);
             if (!makerTakerQuantities)
                 return new WebCallResult<PolymarketOrderResult>(makerTakerQuantities.Error);
 
@@ -113,15 +113,16 @@ namespace Polymarket.Net.Clients.ClobApi
 
         public async Task<WebCallResult<CallResult<PolymarketOrderResult>[]>> PlaceMultipleOrdersAsync(IEnumerable<PolymarketOrderRequest> requests, CancellationToken ct = default)
         {
+            var tokenResult = await PolymarketUtils.GetTokenInfosAsync(requests.Select(x => x.TokenId).Distinct(), _baseClient).ConfigureAwait(false);
+            if (!tokenResult)
+                return new WebCallResult<CallResult<PolymarketOrderResult>[]>(tokenResult.Error);
+
             var builderCode = _baseClient.ClientOptions.BuilderCode ?? "0x0000000000000000000000000000000000000000000000000000000000000000";
             var parameterList = new List<ParameterCollection>();
             foreach (var request in requests)
             {
-                var tokenResult = await PolymarketUtils.GetTokenInfoAsync(request.TokenId, _baseClient).ConfigureAwait(false);
-                if (!tokenResult)
-                    return new WebCallResult<CallResult<PolymarketOrderResult>[]>(tokenResult.Error);
-
-                var makerTakerQuantities = await GetMakerTakerQuantitiesAsync(request.TokenId, request.Side, request.OrderType, request.Quantity, request.Price, request.TimeInForce, tokenResult.Data.TickQuantity, request.QuantityType ?? QuantityType.Shares).ConfigureAwait(false);
+                var tokenInfo = tokenResult.Data.Single(x => x.TokenId == request.TokenId);
+                var makerTakerQuantities = GetMakerTakerQuantities(request.TokenId, request.Side, request.OrderType, request.Quantity, request.Price, request.TimeInForce, tokenInfo.TickQuantity, request.QuantityType ?? QuantityType.Shares, tokenInfo);
                 if (!makerTakerQuantities)
                     return new WebCallResult<CallResult<PolymarketOrderResult>[]>(makerTakerQuantities.Error);
 
@@ -144,7 +145,7 @@ namespace Polymarket.Net.Clients.ClobApi
                     _baseClient.AuthenticationProvider.GetOrderSignature(
                         orderParameters,
                         _baseClient.ClientOptions.Environment.ChainId,
-                        tokenResult.Data.NegativeRisk).ToLowerInvariant());
+                        tokenInfo.NegativeRisk).ToLowerInvariant());
 
                 parameters.Add("order", orderParameters);
                 parameters.Add("owner", credentials.L2!.Key!);
@@ -176,7 +177,16 @@ namespace Polymarket.Net.Clients.ClobApi
             return result.As(ordersResult.ToArray());
         }
 
-        private async Task<CallResult<(decimal MakerQuantity, decimal TakerQuantity)>> GetMakerTakerQuantitiesAsync(string tokenId, OrderSide side, OrderType orderType, decimal quantity, decimal? price, TimeInForce? timeInForce, decimal tickSize, QuantityType quantityType)
+        private CallResult<(decimal MakerQuantity, decimal TakerQuantity)> GetMakerTakerQuantities(
+            string tokenId,
+            OrderSide side,
+            OrderType orderType,
+            decimal quantity,
+            decimal? price,
+            TimeInForce? timeInForce, 
+            decimal tickSize,
+            QuantityType quantityType,
+            PolymarketOrderBook bookInfo)
         {
             if (quantityType == QuantityType.Value && !(orderType == OrderType.Market && side == OrderSide.Buy))
                 throw new ArgumentException("QuantityType.Value can only be set for buy market orders", nameof(quantityType));
@@ -192,17 +202,13 @@ namespace Polymarket.Net.Clients.ClobApi
             }
             else
             {
-                var bookInfo = await _baseClient.ExchangeData.GetOrderBookAsync(tokenId).ConfigureAwait(false);
-                if (!bookInfo)
-                    return bookInfo.As<(decimal, decimal)>(default);
-
                 if (side == OrderSide.Buy)
                 {
                     decimal? marketPrice = null;
                     var sum = 0m;
-                    for (var i = bookInfo.Data.Asks.Length - 1; i >= 0; i--)
+                    for (var i = bookInfo.Asks.Length - 1; i >= 0; i--)
                     {
-                        var ask = bookInfo.Data.Asks[i];
+                        var ask = bookInfo.Asks[i];
                         sum += ask.Quantity;
                         if (sum >= quantity)
                         {
@@ -214,18 +220,18 @@ namespace Polymarket.Net.Clients.ClobApi
                     if (timeInForce == TimeInForce.FillOrKill && marketPrice == null)
                         return new WebCallResult<(decimal, decimal)>(new ServerError(new ErrorInfo(ErrorType.RejectedOrderConfiguration, "FOK order couldn't fill")));
 
-                    if (marketPrice == null && bookInfo.Data.Asks.Length == 0)
+                    if (marketPrice == null && bookInfo.Asks.Length == 0)
                         return new WebCallResult<(decimal, decimal)>(new ServerError(new ErrorInfo(ErrorType.RejectedOrderConfiguration, "Market order couldn't be filled due to empty order book")));
 
-                    price = marketPrice ?? bookInfo.Data.Asks[0].Price;
+                    price = marketPrice ?? bookInfo.Asks[0].Price;
                 }
                 else
                 {
                     decimal? marketPrice = null;
                     var sum = 0m;
-                    for (var i = bookInfo.Data.Bids.Length - 1; i >= 0; i--)
+                    for (var i = bookInfo.Bids.Length - 1; i >= 0; i--)
                     {
-                        var bid = bookInfo.Data.Bids[i];
+                        var bid = bookInfo.Bids[i];
                         sum += bid.Quantity;
                         if (sum >= quantity)
                         {
@@ -237,10 +243,10 @@ namespace Polymarket.Net.Clients.ClobApi
                     if (timeInForce == TimeInForce.FillOrKill && marketPrice == null)
                         return new WebCallResult<(decimal, decimal)>(new ServerError(new ErrorInfo(ErrorType.RejectedOrderConfiguration, "FOK order couldn't fill")));
 
-                    if (marketPrice == null && bookInfo.Data.Bids.Length == 0)
+                    if (marketPrice == null && bookInfo.Bids.Length == 0)
                         return new WebCallResult<(decimal, decimal)>(new ServerError(new ErrorInfo(ErrorType.RejectedOrderConfiguration, "Market order couldn't be filled due to empty order book")));
 
-                    price = marketPrice ?? bookInfo.Data.Bids[0].Price;
+                    price = marketPrice ?? bookInfo.Bids[0].Price;
                 }
             }
 
